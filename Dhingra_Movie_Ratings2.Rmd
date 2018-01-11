@@ -1,0 +1,402 @@
+---
+title: "Predicting IMDb Ratings Using Movie Characteristics"
+author: "Cheshta Dhingra"
+date: 'Due: April 30, 2017 at 11:59PM'
+output:
+  html_document:
+    number_sections: yes
+    self_contained: yes
+    toc: no
+  pdf_document:
+    toc: no
+    toc_depth: 2
+  word_document:
+    toc: no
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+- \fancyfoot[CO,CE]{}
+- \fancyfoot[LE,RO]{\thepage}
+subtitle: STAT 471/571/701, Fall 2017
+graphics: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# I. Executive Summary 
+
+## a. Background
+
+Is it possible to predict the IMDb ratings for a movie before it even hits the theaters? What if we could use data like the movie's title, director, cast, budget, etc. to predict it's overall ratings? Given that thousands of movies are produced each year, I wanted to see if there was a better way to assess a movie without relying on critics or subjective human instincts.  
+
+Specifically, the goals of this analysis is:
+1.  Identify the factors predicting a movie's IMDb score. 
+2.  Propose a classification rule to predict if a movie was rated above or below the average rating for our sample. 
+
+## b. Data  
+
+The data were obtained from the public dataset on kaggle.com, where a user scraped movie data from the IMDb website. It covers data 28 variables for 5043 movies, spanning across 100 years in 66 countries. There are 2399 unique director names, and thousands of actors/actresses. Below are the 28 variables:
+
+"movie_title" "color" "num_critic_for_reviews" "movie_facebook_likes" "duration" "director_name" "director_facebook_likes" "actor_3_name" "actor_3_facebook_likes" "actor_2_name" "actor_2_facebook_likes" "actor_1_name" "actor_1_facebook_likes" "gross" "genres" "num_voted_users" "cast_total_facebook_likes" "facenumber_in_poster" "plot_keywords" "movie_imdb_link" "num_user_for_reviews" "language" "country" "content_rating" "budget" "title_year" "imdb_score" "aspect_ratio"
+
+A more detailed summary of each variable can be found below in section IIA. 
+
+## c. Methods
+
+To develop my final model I created models using several different methods: backward selection, LASSO and Classification Trees. I then compared the testing errors for the different models and chose the one I felt had the most predictive power based on the ROC curves, AUC and significance of included variables. I then found the associated misclassification error using the given fact that the cost of mislabelling a high rated movie is 1.2x the cost of mislabelling a low-rated movie. This gave me my final Bayes Rule Classification Threshold. Finally, I tested my model on my subset of test data.
+
+## d. Main Findings 
+
+The key variables of importance were found to be: color + duration + director_facebook_likes + actor_3_facebook_likes + actor_1_facebook_likes + gross + num_voted_users + cast_total_facebook_likes + facenumber_in_poster + num_user_for_reviews + content_rating + title_year + actor_2_facebook_likes. The Bayes Rule Classification Threshold using the risk ratio of 1.2:1 was 0.454. This means that if the predicted probability of a high rating exceeds 0.454, we will predict that that movie gets a high rating. Using this, our misclassification error was about 26%.
+
+## e. Limitations 
+
+One issue is that I had to exclude several interesting variables such as language and country because my dataset was not a representative sample of movies made outside the US in foreign languages, but it may be very interesting to see how they compare to American films. The dataset also did not account for the difference in currencies in the variable for gross revenue, which means the interpretation of this variable is rather weak. 
+
+# II.  Data Analysis
+
+```{r library, include=FALSE}
+# Libraries
+library(dplyr)
+library(ISLR)
+library(tidyverse)
+library(reshape2)
+library(gridExtra)
+library(car)
+library(leaps)
+library(glmnet)
+library(xtable)
+library(bestglm)
+library(QuantPsyc)
+library(pROC)
+library(rattle)
+library(randomForest)
+library(tree)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(ggplot2)
+```
+
+## a. Data Summary 
+
+### Description of variables
+The data consists of the following characteristics for each movie:
+
+`movie_title` - title of the movie 
+
+`color` - whether the movie is in color or black and white
+
+`num_critic_for_reviews` - number of critics who reviewed the movie 
+
+`movie_facebook_likes` - number of facebook likes the movie had 
+
+`duration` - length of the movie in minutes
+
+`director_name` - name of the director
+
+`director_facebook_likes` - number of facebook liked the director had
+
+`actor_3_name` - name of the 3rd actor 
+
+`actor_3_facebook_likes` - number of facebook likes the 3rd actor had 
+
+`actor_2_name` - name of the 2nd actor
+
+`actor_2_facebook_likes` - number of facebook likes the 2nd actor had
+
+`actor_1_name` - name of the 1st actor
+
+`actor_1_facebook_likes` - number of facebook likes the 1st actor had
+
+`gross` - gross earnings 
+
+`genres` - genres that the movie falls under 
+
+`num_voted_users` - number of users who voted on the movie 
+
+`cast_total_facebook_likes` - total facebook likes for the entire cast 
+
+`facenumber_in_poster` - number of faces in the movie's poster 
+
+`plot_keywords` - keywords regarding the movie's plot 
+
+`movie_imdb_link` - link to the IMDb page 
+
+`num_user_for_reviews` - number of users who reviewed the movie 
+
+`language` - language the movie is in 
+
+`country` - country the movie was made in
+
+`content_rating` - the content rating of the movie 
+
+`budget` - the total budget of the movie in its country's currency 
+
+`title_year` - year the movie was made 
+
+`imdb_score` - the movie's IMDb score 
+
+`aspect_ratio` - aspect ratio of the movie 
+
+### Data cleaning
+
+Since many of the values are missing, we will modify the dataset in the following ways: 
+
+1) `movie_name`, `director_name`, `actor_1_name`,  `actor_2_name` and `actor_3_name`, `movie_imdb_link`,  are not included since they have a large amount of variation and thus little predictive power.  
+
+2) `plot_keywords` will be removed for regression analysis but used later for text analysis. 
+
+3) `language` and `country` had very little variability so it was removed. 
+
+4) The rows with missing values in variables such as `num_critic_for_reviews`, `duration`, `director_facebook_likes`, `actor_3_facebook_likes`, `actor_2_facebook_likes`, `actor_1_facebook_likes`, `gross`, `facenumber_in_poster`, `aspect_ratio`, `title_year`, have been excluded. 
+
+5) The event of interest is `imdb_score`. I have coded a binary variable for movies that recieved a rating above and below 6 as `imdb_binary`. 
+
+```{r, include = FALSE} 
+movies <- read.csv("movie_metadata.csv")
+movies$imdb_binary <- NA #new binary rating variable 
+#recoding movies with rating above 6 to "1" 
+movies$imdb_binary[which(movies$imdb_score == 6 | movies$imdb_score > 6)] <- as.integer(1)
+movies$imdb_binary[which(movies$imdb_score < 6)] <- as.integer(0)
+
+movies <- movies %>% dplyr::select(-movie_title, -genres, -director_name, -actor_1_name, -actor_2_name, -actor_3_name, -movie_imdb_link, -plot_keywords, -language, -country) #22 variables remain 
+movies <- movies[!is.na(movies$num_critic_for_reviews),]
+movies <- movies[!is.na(movies$duration),]
+movies <- movies[!is.na(movies$director_facebook_likes),]
+movies <- movies[!is.na(movies$actor_3_facebook_likes),]
+movies <- movies[!is.na(movies$actor_2_facebook_likes),]
+movies <- movies[!is.na(movies$actor_1_facebook_likes),]
+movies <- movies[!is.na(movies$gross),]
+movies <- movies[!is.na(movies$facenumber_in_poster),]
+movies <- movies[!is.na(movies$aspect_ratio),]
+movies <- movies[!is.na(movies$title_year),]
+movies <- movies[!movies$color == "",]
+summary(movies)
+```
+
+### Graphical Summary
+
+In the Appendix is a graphical summary of the 19 input variables and the response variable we retained in the dataset `movies`. 
+
+## b. Analyses 
+
+### Creating a Test set 
+I retained 20% of the data (about 800 observations) as a testing set to assess my final model. This leaves about 3,200 observations to train the model. 
+
+```{r, include = FALSE}
+#split data into 80:20 training/testing sets
+smp_size <- floor(0.8 * nrow(movies))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(movies)), size = smp_size)
+test <- movies[-train_ind, ]
+movies <- movies[train_ind, ]
+```
+
+### Backward Selection
+
+The first method I will use is Backward Selection. Starting with the full model I successively remove the variable with the highest p-value (lowest significance), then run the logistic regression with the remaining variables. This process is repeated until I reach a model which has only variables significant at the 0.05 level. The best model is shown below with its associated Anova test results (`fit.best`). 
+
+```{r, include= FALSE, eval = FALSE}
+#backward selection LOGISTIC REGRESSION
+glm_fit_backward_all <- glm(imdb_binary ~.-imdb_score,movies, family = "binomial")
+Anova(glm_fit_backward_all)
+glm_fit_b.1 <- update(glm_fit_backward_all, .~. -movie_facebook_likes)
+Anova(glm_fit_b.1)
+glm_fit_b.2 <- update(glm_fit_b.1, .~. -aspect_ratio)
+Anova(glm_fit_b.2)
+glm_fit_b.3 <- update(glm_fit_b.2, .~. -budget)
+Anova(glm_fit_b.3)
+glm_fit_b.4 <- update(glm_fit_b.3, .~. -num_critic_for_reviews)
+Anova(glm_fit_b.4)
+```
+
+Here is the ANOVA test for our final backward selection model: 
+
+```{r, echo = FALSE, warning=FALSE}
+glm_fit_b.best <- glm(imdb_binary~color + duration + director_facebook_likes + actor_3_facebook_likes + actor_1_facebook_likes + gross + num_voted_users + cast_total_facebook_likes + facenumber_in_poster + num_user_for_reviews + content_rating + title_year + actor_2_facebook_likes, movies, family = "binomial")
+Anova(glm_fit_b.best)
+```
+
+### LASSO in classifications:
+
+Next, I will use LASSO to find the best model variables. 
+The regularization techniques used in regression are readily applied to classification problems. For a given lambda we minimize -log liklihood/n + lambda |beta|
+To remain consistent in both binary and continuous responses, glmnet() uses the following penalized least squares. 
+RSS/(2n) + lambda |beta|
+
+Shown below is the plot of the binomial deviance from the 10-fold cross validated LASSO model. We want to minimize this. 
+
+```{r, echo = FALSE, warning=FALSE}
+#LASSO (alpha = 1) 
+X.ratings <- model.matrix(glm_fit_b.best)[,-1] #
+Y.ratings <- movies$imdb_binary
+set.seed(123)
+fit_lasso_cv <- cv.glmnet(X.ratings, Y.ratings, alpha=1, family="binomial", nfolds = 10, type.measure = "deviance")
+plot(fit_lasso_cv)
+```
+
+```{r, include = FALSE}
+# i): lambda.min
+coef.min <-coef(fit_lasso_cv, s="lambda.min") 
+coef.min <- coef.min[which(coef.min !=0), ]
+as.matrix(coef.min)
+# ii): lambda.1se
+coef.1se <- coef(fit_lasso_cv, s="lambda.1se")  
+coef.1se <- coef.1se[which(coef.1se !=0),] 
+as.matrix(coef.1se)
+```
+
+```{r, echo = FALSE, warning = FALSE}
+fit_lasso_min <- glm(imdb_binary~ color + duration + director_facebook_likes +  actor_3_facebook_likes + actor_1_facebook_likes + gross + num_voted_users + cast_total_facebook_likes +  facenumber_in_poster + num_user_for_reviews + content_rating + title_year + actor_2_facebook_likes, movies, family=binomial)
+Anova(fit_lasso_min)
+#summary(fit_lasso_min)
+
+fit_lasso_1se <- glm(imdb_binary~ color + duration + director_facebook_likes +  actor_3_facebook_likes + gross + num_voted_users  +  facenumber_in_poster + num_user_for_reviews + content_rating + title_year, movies, family=binomial)
+Anova(fit_lasso_1se)
+#summary(fit_lasso_1se)
+```
+
+```{r, echo=FALSE}
+# ROC and AUC
+fit_backward.roc <- roc(movies$imdb_binary, glm_fit_b.best$fitted, plot=F, col="blue") 
+fit_lasso_min.roc <- roc(movies$imdb_binary, fit_lasso_min$fitted, plot=F, col="blue")
+fit_lasso_1se.roc <- roc(movies$imdb_binary, fit_lasso_1se$fitted, plot=F, col="blue")
+plot(1-fit_backward.roc$specificities, fit_backward.roc$sensitivities, col="red", pch=16, cex=.7, 
+     xlab="False Positive", 
+     ylab="Sensitivity")
+  points(1-fit_lasso_min.roc$specificities, fit_lasso_min.roc$sensitivities, col="blue", pch=16, cex=.6)
+  points(1-fit_lasso_1se.roc$specificities, fit_lasso_1se.roc$sensitivities, col="black", pch=16, cex=.6)
+  title("Red:Backwards Selection, Blue: LASSO Lambda Min, Black: LASSO Lambda 1SE")
+auc(fit_backward.roc) #0.8219
+auc(fit_lasso_min.roc) #0.8219
+auc(fit_lasso_1se.roc) #0.8184
+```
+
+As we can see, all three models are fairly similar, with similar AUCs but I decided to go with the backward selection model since all of the variables in it are significant at the 0.05 level, which cannot be said about the LASSO models. 
+
+Now that we have selected our final model of imdb_binary~color + duration + director_facebook_likes + actor_3_facebook_likes + actor_1_facebook_likes + gross + num_voted_users + cast_total_facebook_likes + facenumber_in_poster + num_user_for_reviews + content_rating + title_year + actor_2_facebook_likes 
+                                                    
+which was obtained through backward selection, we now need to come up with a reasonable classifier for our model. Based on a quick and somewhat arbitrary guess, it's estimated that it costs a bit more to mislabel a high-rated movie as it does to mislabel a low-rated movie. Based on this risk ratio of 1:1.2, I will propose a specific classification rule to minimize the cost. Then: 
+
+$a_{10}/a_{01}=1.2$ --> $a_{01}/a_{10}=0.833$
+
+$P(Y=1|x) > \frac{a_{01}/a_{10}}{1+a_{01}/a_{10}} = \frac{0.833}{1+0.833}= 0.4544$
+
+$logit > log(\frac{0.4544}{1 - 0.4544}) =  log(0.8328) = -0.183$ gives us the Bayes rule! 
+
+Therefore the Bayes Rule Classification Threshold using this risk ratio would be about 0.45. Using this threshold we get a weighted misclassification error (MCE) of 0.26. 
+
+```{r, include=F}
+# Summary of Selected Model
+anova(glm_fit_b.best)
+#summary(fit_b.best)
+# Bayes Rule Classifier
+fit.backward.pred.bayes=rep("0", length(movies$imdb_binary))
+fit.backward.pred.bayes[glm_fit_b.best$fitted > 0.454]="1" 
+MCE.bayes.backward=(sum(2*(fit.backward.pred.bayes[movies$imdb_binary == "1"] != "1")) + sum(fit.backward.pred.bayes[movies$imdb_binary == "0"] != "0"))/length(movies$imdb_binary)
+MCE.bayes.backward
+MCE.bayes.2 <- data.frame(matrix(0, 100, 2))
+colnames(MCE.bayes.2) <- c("Threshold", "MCE")
+
+for(i in 1:100) {
+MCE.bayes.2[i, 1] <- i/100
+fit.best.pred.bayes.2=rep("0", length(movies$imdb_binary))
+fit.best.pred.bayes.2[glm_fit_b.best$fitted > i/100]="1" 
+MCE.bayes.2[i,2]=(sum(2*(fit.best.pred.bayes.2[movies$imdb_binary == "1"] != "1")) 
+           + sum(fit.best.pred.bayes.2[movies$imdb_binary == "0"] != "0"))/length(movies$imdb_binary)
+}
+```
+
+```{r, echo = FALSE}
+ggplot(MCE.bayes.2, aes(x = Threshold, y = MCE)) + geom_point() +
+    labs(title = "Threshold vs. MCE", x = "Threshold", y = "MCE")
+```
+
+### Classification trees 
+
+#### Single Tree 
+```{r, echo = FALSE}
+fit.tree <- rpart(movies$imdb_binary ~. -imdb_score, movies)
+fancyRpartPlot(fit.tree, main = "Classification Tree for data2", sub = "")  
+
+# Use ROC/AUC ect. to measure the performance
+predict(fit.tree, test)[1:20]
+df.pred <- data.frame(predict(fit.tree, test)) 
+prob.1 <- df.pred$predict.fit.tree..test.
+roc(test$imdb_binary, prob.1, plot=T) 
+
+```
+Area under the curve: 0.7554
+
+### Evaluating my model using testing data
+
+As we can see, the backward model still has the highest AUC. I will use this model to get the fitted prob's using the testing data:
+```{r, echo = FALSE}
+fit.fitted.test <- predict(glm_fit_b.best, test, type="response") # fit1 prob
+fit.test.roc <- roc(test$imdb_binary,fit.fitted.test, plot=T )
+auc(fit.test.roc)
+```
+
+
+## c. Conclusion 
+
+The key variables of importance were found to be: color + duration + director_facebook_likes + actor_3_facebook_likes + actor_1_facebook_likes + gross + num_voted_users + cast_total_facebook_likes + facenumber_in_poster + num_user_for_reviews + content_rating + title_year + actor_2_facebook_likes. The Bayes Rule Classification Threshold using the risk ratio of 1.2:1 was 0.454. This means that if the predicted probability of a high rating exceeds 0.454, we will predict that that movie gets a high rating. Using this, our misclassification error was about 26%.
+
+# III.  Citation 
+Data obtained from: (https://www.kaggle.com/deepmatrix/imdb-5000-movie-dataset) 
+
+# IV. Appendix
+
+
+```{r, include = FALSE}
+# Plot distributions for all relevant variables
+p1 <- ggplot(movies, aes(x = color)) + geom_bar() + labs(title = "Color", x = "color", y = "Count") + theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p3 <- ggplot(movies, aes(x = num_critic_for_reviews)) + geom_histogram(binwidth = 1) + labs(title = "num_critic_for_reviews", x = "num_critic_for_reviews", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p4 <- ggplot(movies, aes(x = duration)) + geom_histogram(binwidth = 1) + labs(title = "Duration", x = "minutes", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p5 <- ggplot(movies, aes(x = director_facebook_likes)) + geom_histogram(binwidth = 1) + labs(title = "director_facebook_likes", x = "director_facebook_likes", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p6 <- ggplot(movies, aes(x = actor_1_facebook_likes)) + geom_histogram(binwidth = 1) + labs(title = "actor_1_facebook_likes", x = "actor_1_facebook_likes", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p7 <- ggplot(movies, aes(x = actor_2_facebook_likes)) + geom_histogram(binwidth = 1) + labs(title = "actor_2_facebook_likes", x = "actor_2_facebook_likes", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p8 <- ggplot(movies, aes(x = actor_3_facebook_likes)) + geom_histogram(binwidth = 1) + labs(title = "actor_3_facebook_likes", x = "actor_3_facebook_likes", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p9 <- ggplot(movies, aes(x = gross)) + geom_histogram(binwidth = 1) + labs(title = "gross", x = "gross", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p10 <- ggplot(movies, aes(x = num_voted_users)) + geom_histogram(binwidth = 1) + labs(title = "num_voted_users", x = "num_voted_users", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p11 <- ggplot(movies, aes(x = cast_total_facebook_likes)) + geom_histogram(binwidth = 1) + labs(title = "cast_total_facebook_likes", x = "cast_total_facebook_likes", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p12 <- ggplot(movies, aes(x = facenumber_in_poster)) + geom_histogram(binwidth = 1) + labs(title = "facenumber in poster", x = "number", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p13 <- ggplot(movies, aes(x = num_user_for_reviews)) + geom_histogram(binwidth = 1) + labs(title = "num_user_for_reviews", x = "num_user_for_reviews", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p14 <- ggplot(movies, aes(x = content_rating)) + geom_bar() + labs(title = "content rating", x = "content rating", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p15 <- ggplot(movies, aes(x = budget)) + geom_histogram(binwidth = 1) + labs(title = "budget", x = "budget", y = "Count") +theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p16 <- ggplot(movies, aes(x = title_year)) + geom_bar() + labs(title = "year", x = "year", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p17 <- ggplot(movies, aes(x = imdb_score)) + geom_histogram(binwidth = 1) + labs(title = "IMDb score", x = "score", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p18 <- ggplot(movies, aes(x = aspect_ratio)) + geom_histogram(binwidth = 1) + labs(title = "aspect_ratio", x = "aspect_ratio", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p19 <- ggplot(movies, aes(x = movie_facebook_likes)) + geom_histogram(binwidth = 1) + labs(title = "Movie FB Likes", x = "Likes", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+
+p20 <- ggplot(movies, aes(x = imdb_binary)) + geom_bar() + labs(title = "IMDb Binary", x = "IMDb binary", y = "Count")+theme(axis.text.x=element_text(angle=45,hjust=1,vjust=0.5))
+```
+
+```{r, echo = FALSE}
+plot(p1)
+plot(p4)
+plot(p5)
+plot(p6)
+plot(p20)
+```
